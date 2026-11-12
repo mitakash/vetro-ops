@@ -29,16 +29,24 @@ export type WhatIfResult =
       partial: boolean;
     };
 
-export function parseDecimalAmount(input: string, decimals: number): bigint | null {
-  const trimmed = input.trim().replace(/,/g, "");
-  if (!/^\d+(\.\d+)?$/.test(trimmed)) return null;
-  const [whole, fraction = ""] = trimmed.split(".");
-  if (fraction.length > decimals) return null;
+export type ParsedAmount = { ok: true; raw: bigint } | { ok: false; message: string };
+
+/**
+ * Parse a token amount. Accepts a leading or trailing dot, surrounding whitespace,
+ * thousands separators, and a comma decimal separator when it is not also a valid
+ * thousands group.
+ */
+export function parseDecimalAmount(input: string, decimals: number, symbol = "This token"): ParsedAmount {
+  const normalized = normalizeAmount(input);
+  if (!normalized.ok) return normalized;
+  const [whole, fraction = ""] = normalized.canonical.split(".");
+  if (fraction.length > decimals) return { ok: false, message: `${symbol} allows up to ${decimals} decimals.` };
   try {
-    const raw = BigInt(whole + fraction.padEnd(decimals, "0"));
-    return raw > 0n ? raw : null;
+    const raw = BigInt((whole === "" ? "0" : whole) + fraction.padEnd(decimals, "0"));
+    if (raw <= 0n) return { ok: false, message: "Enter an amount greater than zero." };
+    return { ok: true, raw };
   } catch {
-    return null;
+    return { ok: false, message: "Enter a positive number using digits and a decimal separator." };
   }
 }
 
@@ -64,11 +72,11 @@ export function sizePresets(input: {
 }
 
 export function quoteWhatIf(sim: PoolSim, side: "buy" | "sell", amountText: string): WhatIfResult {
-  const decimals = inputDecimals(sim, side);
-  const raw = parseDecimalAmount(amountText, decimals);
-  if (raw === null) return { ok: false, message: "Enter a positive amount with no more decimals than the token allows." };
-  if (sim.kind === "curve") return quoteCurve(sim, side, raw);
-  return quoteCl(sim, side, raw);
+  const token = inputToken(sim, side);
+  const parsed = parseDecimalAmount(amountText, token.decimals, token.symbol);
+  if (!parsed.ok) return parsed;
+  if (sim.kind === "curve") return quoteCurve(sim, side, parsed.raw);
+  return quoteCl(sim, side, parsed.raw);
 }
 
 function quoteCurve(sim: CurveSim, side: "buy" | "sell", amount: bigint): WhatIfResult {
@@ -156,6 +164,9 @@ function quoteCl(sim: ClSim, side: "buy" | "sell", amount: bigint): WhatIfResult
   const receiveSymbol = side === "sell" ? counterSymbol : vetroSymbol;
   const payDecimals = side === "sell" ? vetroDecimals : counterDecimals;
   const receiveDecimals = side === "sell" ? counterDecimals : vetroDecimals;
+  if (quote.amountIn > 0n && quote.amountOut <= 0n && !quote.insufficient) {
+    return { ok: false, message: `That ${paySymbol} amount is too small to receive any ${receiveSymbol}.` };
+  }
   if (quote.insufficient || quote.amountOut <= 0n || quote.amountIn <= 0n) {
     return { ok: false, message: "That size exceeds the loaded pool depth." };
   }
@@ -217,11 +228,74 @@ function finish(input: {
   };
 }
 
-function inputDecimals(sim: PoolSim, side: "buy" | "sell"): number {
-  if (sim.kind === "curve") return sim.decimals[side === "buy" ? sim.counterIndex : sim.vetroIndex];
-  const vetro = sim.vetroIsToken0 ? sim.decimals0 : sim.decimals1;
-  const counter = sim.vetroIsToken0 ? sim.decimals1 : sim.decimals0;
-  return side === "sell" ? vetro : counter;
+function inputToken(sim: PoolSim, side: "buy" | "sell"): { decimals: number; symbol: string } {
+  if (sim.kind === "curve") {
+    const index = side === "buy" ? sim.counterIndex : sim.vetroIndex;
+    return { decimals: sim.decimals[index], symbol: sim.symbols[index] };
+  }
+  const vetroDecimals = sim.vetroIsToken0 ? sim.decimals0 : sim.decimals1;
+  const counterDecimals = sim.vetroIsToken0 ? sim.decimals1 : sim.decimals0;
+  const vetroSymbol = sim.vetroIsToken0 ? sim.symbol0 : sim.symbol1;
+  const counterSymbol = sim.vetroIsToken0 ? sim.symbol1 : sim.symbol0;
+  return side === "sell"
+    ? { decimals: vetroDecimals, symbol: vetroSymbol }
+    : { decimals: counterDecimals, symbol: counterSymbol };
+}
+
+function normalizeAmount(input: string): { ok: true; canonical: string } | { ok: false; message: string } {
+  const trimmed = input.trim();
+  if (!trimmed) return { ok: false, message: "Enter a positive amount." };
+  if (/\s/.test(trimmed)) return { ok: false, message: "Remove spaces inside the amount." };
+  if (!/^[\d.,]+$/.test(trimmed)) return { ok: false, message: "Enter a positive number using digits and a decimal separator." };
+
+  const lastDot = trimmed.lastIndexOf(".");
+  const lastComma = trimmed.lastIndexOf(",");
+  if (lastDot >= 0 && lastComma >= 0) {
+    const decimalSep = lastDot > lastComma ? "." : ",";
+    const thousandSep = decimalSep === "." ? "," : ".";
+    const parts = trimmed.split(decimalSep);
+    if (parts.length !== 2) return { ok: false, message: "Use one decimal separator, such as 1,000.5 or 1.000,5." };
+    const [whole, fraction] = parts;
+    if (!isGrouped(whole, thousandSep)) {
+      return { ok: false, message: "Use thousands separators in groups of three, such as 1,000.5 or 1.000,5." };
+    }
+    if (!/^\d*$/.test(fraction)) return { ok: false, message: "Put the decimal separator after the thousands separators, such as 1,000.5." };
+    return { ok: true, canonical: `${ungroup(whole, thousandSep) || "0"}.${fraction}` };
+  }
+
+  if (lastComma >= 0) {
+    const groups = trimmed.split(",");
+    const single = groups.length === 2;
+    const fraction = single ? groups[1] : "";
+    const whole = single ? groups[0] : "";
+    if (single && (fraction.length !== 3 || whole === "" || whole === "0")) {
+      return { ok: true, canonical: `${whole || "0"}.${fraction}` };
+    }
+    if (isGrouped(trimmed, ",")) {
+      if (single) {
+        return {
+          ok: false,
+          message: `${trimmed} is ambiguous. Use ${whole}${fraction} for thousands, or ${whole}.${fraction} for a comma decimal.`,
+        };
+      }
+      return { ok: true, canonical: groups.join("") };
+    }
+    return { ok: false, message: "Use a comma as the decimal separator, such as 1,5, or as thousands separators, such as 1,000,000." };
+  }
+
+  if (trimmed.split(".").length > 2) return { ok: false, message: "Use one decimal point, such as 0.001." };
+  return { ok: true, canonical: trimmed };
+}
+
+function isGrouped(value: string, separator: string): boolean {
+  const groups = value.split(separator);
+  if (groups.length < 2) return /^\d+$/.test(value);
+  if (!/^\d{1,3}$/.test(groups[0])) return false;
+  return groups.slice(1).every((group) => /^\d{3}$/.test(group));
+}
+
+function ungroup(value: string, separator: string): string {
+  return value.split(separator).join("");
 }
 
 function amountForUsd(

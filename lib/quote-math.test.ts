@@ -379,8 +379,13 @@ describe("quote math", () => {
     assert.match(tooBig.message, /larger than this pool's vetBTC/);
     const bad = quoteWhatIf(curve, "buy", "1.000000000");
     assert.equal(bad.ok, false);
-    assert.equal(parseDecimalAmount("0", 6), null);
-    assert.equal(parseDecimalAmount(formatAmount(973568n, 8), 8), 973568n);
+    if (!bad.ok) assert.equal(bad.message, "WBTC allows up to 8 decimals.");
+    const zero = parseDecimalAmount("0", 6, "USDC");
+    assert.equal(zero.ok, false);
+    if (!zero.ok) assert.equal(zero.message, "Enter an amount greater than zero.");
+    const rounded = parseDecimalAmount(formatAmount(973568n, 8), 8, "WBTC");
+    assert.equal(rounded.ok, true);
+    if (rounded.ok) assert.equal(rounded.raw, 973568n);
     assert.deepEqual(
       sizePresets({ symbol: "WBTC", fairValue: null, poolPrice: null, inputIsCounter: true }).map((chip) => chip.amount),
       ["1", "10", "100"],
@@ -389,6 +394,78 @@ describe("quote math", () => {
       sizePresets({ symbol: "USDC.e", fairValue: null, poolPrice: null, inputIsCounter: true }).map((chip) => chip.label),
       ["$1K", "$10K", "$100K"],
     );
+  });
+
+  it("accepts mobile amounts for 6, 8, and 18 decimal tokens", () => {
+    const cases: { input: string; decimals: number; symbol: string; raw: bigint }[] = [
+      { input: "  .001 ", decimals: 6, symbol: "USDC", raw: 1_000n },
+      { input: "1.", decimals: 6, symbol: "USDC", raw: 1_000_000n },
+      { input: "1,000.5", decimals: 6, symbol: "USDC", raw: 1_000_500_000n },
+      { input: "1.000,5", decimals: 6, symbol: "USDC", raw: 1_000_500_000n },
+      { input: "0,001", decimals: 8, symbol: "WBTC", raw: 100_000n },
+      { input: ".001", decimals: 8, symbol: "WBTC", raw: 100_000n },
+      { input: "0.00000001", decimals: 8, symbol: "WBTC", raw: 1n },
+      { input: ".001", decimals: 8, symbol: "cbBTC", raw: 100_000n },
+      { input: ".001", decimals: 8, symbol: "hemiBTC", raw: 100_000n },
+      { input: ".001", decimals: 18, symbol: "vetBTC", raw: 1_000_000_000_000_000n },
+      { input: "1,5", decimals: 18, symbol: "vetBTC", raw: 1_500_000_000_000_000_000n },
+    ];
+    for (const entry of cases) {
+      const parsed = parseDecimalAmount(entry.input, entry.decimals, entry.symbol);
+      assert.equal(parsed.ok, true, entry.input);
+      if (parsed.ok) assert.equal(parsed.raw, entry.raw, entry.input);
+    }
+    const usdc = parseDecimalAmount("0.0000001", 6, "USDC");
+    assert.equal(usdc.ok, false);
+    if (!usdc.ok) assert.equal(usdc.message, "USDC allows up to 6 decimals.");
+    const wbtc = parseDecimalAmount(".000000001", 8, "WBTC");
+    assert.equal(wbtc.ok, false);
+    if (!wbtc.ok) assert.equal(wbtc.message, "WBTC allows up to 8 decimals.");
+    const vet = parseDecimalAmount("1." + "0".repeat(19), 18, "vetBTC");
+    assert.equal(vet.ok, false);
+    if (!vet.ok) assert.equal(vet.message, "vetBTC allows up to 18 decimals.");
+    const ambiguous = parseDecimalAmount("1,000", 8, "WBTC");
+    assert.equal(ambiguous.ok, false);
+    if (!ambiguous.ok) assert.match(ambiguous.message, /ambiguous/);
+
+    const spot = 990_000_000_000_000_000n;
+    const sqrt = targetSqrtPrice({ fairWad: spot, decimals0: 8, decimals1: 18, vetroIsToken0: false });
+    const tick = approximateTick(sqrt);
+    const word = bitmapWord(tick, 10);
+    const sim: ClSim = {
+      kind: "cl",
+      sqrtPriceX96: sqrt.toString(),
+      tick,
+      liquidity: (10n ** 24n).toString(),
+      feePips: 500,
+      tickSpacing: 10,
+      decimals0: 8,
+      decimals1: 18,
+      symbol0: "WBTC",
+      symbol1: "vetBTC",
+      vetroIsToken0: false,
+      fairWad: (10n ** 18n).toString(),
+      bitmap: [
+        { word: word - 1, value: "0" },
+        { word, value: "0" },
+        { word: word + 1, value: "0" },
+      ],
+      ticks: [],
+    };
+    const buy = quoteWhatIf(sim, "buy", ".001");
+    assert.equal(buy.ok, true);
+    if (!buy.ok) return;
+    assert.equal(buy.paySymbol, "WBTC");
+    assert.equal(buy.payAmount, "0.00100000");
+    const dust = quoteWhatIf(sim, "buy", "0.00000001");
+    assert.equal(dust.ok, false);
+    if (!dust.ok) assert.match(dust.message, /too small to receive any vetBTC/);
+    const tooFine = quoteWhatIf(sim, "buy", "0.000000001");
+    assert.equal(tooFine.ok, false);
+    if (!tooFine.ok) assert.equal(tooFine.message, "WBTC allows up to 8 decimals.");
+    const sell = quoteWhatIf(sim, "sell", ".000000001");
+    if (!sell.ok) assert.match(sell.message, /too small/);
+    else assert.equal(sell.paySymbol, "vetBTC");
   });
 
   it("turns a 7-day reward rate into a daily amount", () => {

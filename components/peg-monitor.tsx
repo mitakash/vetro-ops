@@ -417,6 +417,7 @@ function WhatIf({ row }: { row: PegRow }) {
             Amount ({symbol})
             <Input
               id={inputId}
+              type="text"
               inputMode="decimal"
               value={amount}
               placeholder="0.0"
