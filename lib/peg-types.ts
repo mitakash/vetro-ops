@@ -114,6 +114,10 @@ export type PegMonitor = {
   ok: boolean;
   fetchedAt: string;
   cached: boolean;
+  /** True when this snapshot is older than five minutes. */
+  stale: boolean;
+  /** True when no snapshot exists yet and the first read is still running. */
+  pending: boolean;
   /** Ethereum provider that served the peg reads. Never an RPC URL. */
   ethereumProvider: RpcProviderName | null;
   gatewayLogs: GatewayLogSummary | null;

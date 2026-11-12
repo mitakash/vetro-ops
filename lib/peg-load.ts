@@ -102,7 +102,7 @@ type ClDraft = {
   wallet: [number, number];
 };
 
-export async function loadPegMonitor(): Promise<Omit<PegMonitor, "cached">> {
+export async function loadPegMonitor(): Promise<Omit<PegMonitor, "cached" | "stale" | "pending">> {
   const fetchedAt = new Date().toISOString();
   let threshold = 50;
   try {

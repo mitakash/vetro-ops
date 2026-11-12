@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { AlertTriangle } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -18,6 +18,7 @@ import {
 } from "@/components/ui/table";
 import { type PegAsset } from "@/lib/peg-math";
 import type { PegMonitor, PegRow } from "@/lib/peg-types";
+import { formatDataAsOf, isSnapshotVeryStale, STALE_MS } from "@/lib/peg-freshness";
 import { formatBps } from "@/lib/quote-math";
 import { externalLinkLabel, linkPlace } from "@/lib/venue-links";
 import { quoteWhatIf, sizePresets, type WhatIfResult } from "@/lib/what-if";
@@ -26,6 +27,7 @@ const PEGS: PegAsset[] = ["VUSD", "sVUSD", "vetBTC", "svetBTC"];
 
 export function PegMonitorView({ data }: { data: PegMonitor }) {
   const router = useRouter();
+  const showPrices = !data.pending && !(data.error && data.rows.length === 0);
 
   return (
     <div className="flex flex-col gap-6">
@@ -35,7 +37,7 @@ export function PegMonitorView({ data }: { data: PegMonitor }) {
           <p className="mt-1 max-w-3xl text-sm text-muted-foreground">
             Public read-only prices for VUSD, sVUSD, vetBTC, and svetBTC. Each row is the pool&apos;s
             price of the Vetro token versus fair value, and the trade that would move that price back
-            to fair. Snapshots refresh about once a minute.
+            to fair. A saved snapshot is shown right away. A newer read runs in the background.
           </p>
         </div>
         <Button variant="outline" onClick={() => router.refresh()}>
@@ -43,7 +45,14 @@ export function PegMonitorView({ data }: { data: PegMonitor }) {
         </Button>
       </div>
 
-      {data.error ? (
+      {data.pending ? null : <DataAsOf fetchedAt={data.fetchedAt} />}
+
+      {data.pending ? (
+        <Alert>
+          <AlertTitle>Prices are loading</AlertTitle>
+          <AlertDescription>Refresh in a few seconds.</AlertDescription>
+        </Alert>
+      ) : data.error ? (
         <Alert variant="destructive">
           <AlertTriangle />
           <AlertTitle>Read failed</AlertTitle>
@@ -51,33 +60,37 @@ export function PegMonitorView({ data }: { data: PegMonitor }) {
         </Alert>
       ) : null}
 
-      {data.alert.active ? (
-        <Alert variant="destructive">
-          <AlertTriangle />
-          <AlertTitle>Outside the {data.alert.thresholdBps} bp band</AlertTitle>
-          <AlertDescription>{data.alert.reasons.join(" · ")}</AlertDescription>
-        </Alert>
-      ) : (
-        <Alert>
-          <AlertTitle>Inside the {data.alert.thresholdBps} bp band</AlertTitle>
-          <AlertDescription>
-            No pool with a fair value is more than {data.alert.thresholdBps} bps away. A red number is a
-            discount. A green number is a premium.
-          </AlertDescription>
-        </Alert>
-      )}
+      {showPrices ? (
+        data.alert.active ? (
+          <Alert variant="destructive">
+            <AlertTriangle />
+            <AlertTitle>Outside the {data.alert.thresholdBps} bp band</AlertTitle>
+            <AlertDescription>{data.alert.reasons.join(" · ")}</AlertDescription>
+          </Alert>
+        ) : (
+          <Alert>
+            <AlertTitle>Inside the {data.alert.thresholdBps} bp band</AlertTitle>
+            <AlertDescription>
+              No pool with a fair value is more than {data.alert.thresholdBps} bps away. A red number is a
+              discount. A green number is a premium.
+            </AlertDescription>
+          </Alert>
+        )
+      ) : null}
 
-      <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        {PEGS.map((peg) => (
-          <WorstCard
-            key={peg}
-            peg={peg}
-            worst={data.worst[peg]}
-            fair={fairDetail(data, peg)}
-            notices={data.rows.filter((row) => row.peg === peg && row.counterparty && row.excludeFromHeadline)}
-          />
-        ))}
-      </section>
+      {showPrices ? (
+        <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          {PEGS.map((peg) => (
+            <WorstCard
+              key={peg}
+              peg={peg}
+              worst={data.worst[peg]}
+              fair={fairDetail(data, peg)}
+              notices={data.rows.filter((row) => row.peg === peg && row.counterparty && row.excludeFromHeadline)}
+            />
+          ))}
+        </section>
+      ) : null}
 
       <p className="text-xs text-muted-foreground">
         Ethereum {data.ethereumBlock ? `block ${Number(data.ethereumBlock.number).toLocaleString("en-US")} · ${formatUtc(data.ethereumBlock.timestamp)}` : "unread"}
@@ -85,14 +98,40 @@ export function PegMonitorView({ data }: { data: PegMonitor }) {
         {" · "}
         Hemi {data.hemiBlock ? `block ${Number(data.hemiBlock.number).toLocaleString("en-US")} · ${formatUtc(data.hemiBlock.timestamp)}` : "unread"}
         {" · "}
-        BTC {data.fair.btcUsd ?? "—"} · ETH {data.fair.ethUsd ?? "—"} · snapshot {formatUtc(data.fetchedAt)}
+        BTC {data.fair.btcUsd ?? "—"} · ETH {data.fair.ethUsd ?? "—"}
       </p>
 
-      {PEGS.map((peg) => (
-        <TokenTable key={peg} peg={peg} rows={data.rows.filter((row) => row.peg === peg)} updated={data.fetchedAt} />
-      ))}
+      {showPrices
+        ? PEGS.map((peg) => (
+            <TokenTable key={peg} peg={peg} rows={data.rows.filter((row) => row.peg === peg)} updated={data.fetchedAt} />
+          ))
+        : null}
 
       <HowCalculated />
+    </div>
+  );
+}
+
+function DataAsOf({ fetchedAt }: { fetchedAt: string }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 30_000);
+    return () => clearInterval(id);
+  }, []);
+  const age = now - Date.parse(fetchedAt);
+  return (
+    <div className="flex flex-col gap-1" suppressHydrationWarning>
+      <p className="flex flex-wrap items-center gap-2 text-sm" suppressHydrationWarning>
+        <span>{formatDataAsOf(fetchedAt, now)}</span>
+        {isSnapshotVeryStale(fetchedAt, now) ? (
+          <span className="rounded-full border border-amber-400/40 bg-amber-400/15 px-2 py-0.5 text-xs font-medium text-amber-300">
+            Stale
+          </span>
+        ) : null}
+      </p>
+      {age > STALE_MS ? (
+        <p className="text-xs text-muted-foreground">Refreshing in the background. Reload for the latest.</p>
+      ) : null}
     </div>
   );
 }

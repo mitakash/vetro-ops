@@ -10,6 +10,8 @@ export async function GET(request: Request) {
   const authorized = Boolean(secret) && request.headers.get("authorization") === `Bearer ${secret}`;
   const status = await getPegMonitor({ fresh: fresh && authorized });
   return Response.json(status, {
-    headers: { "cache-control": "public, max-age=60, s-maxage=60" },
+    headers: {
+      "cache-control": status.pending ? "no-store" : "public, max-age=60, s-maxage=60",
+    },
   });
 }
