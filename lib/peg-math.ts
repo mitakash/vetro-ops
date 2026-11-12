@@ -330,6 +330,25 @@ export function tradeStableToFair(
   return finishStableTrade(buy, best.dx, best.dy, best.end, spot, vetroDecimals, counterDecimals, status);
 }
 
+/**
+ * Average counter tokens paid or received per Vetro token.
+ * `decimalsIn` is always the Vetro amount's decimals. Swapping them makes a
+ * 6-decimal stable look like a price near zero when buying the 18-decimal token.
+ */
+export function counterPerVetroExecutionWad(input: {
+  counterAmount: bigint;
+  vetroAmount: bigint;
+  vetroDecimals: number;
+  counterDecimals: number;
+}): bigint {
+  return exchangeWad(
+    input.counterAmount,
+    input.vetroAmount,
+    input.vetroDecimals,
+    input.counterDecimals,
+  );
+}
+
 function finishStableTrade(
   buy: boolean,
   amountIn: bigint,
@@ -340,9 +359,12 @@ function finishStableTrade(
   counterDecimals: number,
   status: "ok" | "insufficient",
 ): TradeToFair {
-  const averageWad = buy
-    ? exchangeWad(amountIn, amountOut, counterDecimals, vetroDecimals)
-    : exchangeWad(amountOut, amountIn, vetroDecimals, counterDecimals);
+  const averageWad = counterPerVetroExecutionWad({
+    counterAmount: buy ? amountIn : amountOut,
+    vetroAmount: buy ? amountOut : amountIn,
+    vetroDecimals,
+    counterDecimals,
+  });
   return {
     status,
     direction: buy ? "buy" : "sell",

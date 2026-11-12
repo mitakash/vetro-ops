@@ -35,6 +35,7 @@ import {
   counterPerVetroWad,
   fairCounterPerVetroWad,
   isBtcWrapper,
+  counterPerVetroExecutionWad,
   quoteToSqrtPrice,
   stableMarginalWad,
   targetSqrtPrice,
@@ -715,9 +716,12 @@ function finishCl(
     tradeUsd = formatUsdWad(usdNotionalWad(quote.amountIn, inputDecimals, usdFor(inputSymbol, references) ?? 0n));
     if ((usdFor(inputSymbol, references) ?? 0n) === 0n) tradeUsd = null;
     if (quote.amountOut > 0n && quote.amountIn > 0n) {
-      const average = selling
-        ? exchangeWad(quote.amountOut, quote.amountIn, side.vetro.decimals, side.counter.decimals)
-        : exchangeWad(quote.amountIn, quote.amountOut, side.counter.decimals, side.vetro.decimals);
+      const average = counterPerVetroExecutionWad({
+        counterAmount: selling ? quote.amountOut : quote.amountIn,
+        vetroAmount: selling ? quote.amountIn : quote.amountOut,
+        vetroDecimals: side.vetro.decimals,
+        counterDecimals: side.counter.decimals,
+      });
       averagePrice = formatPegPrice(average);
       priceImpactBps = deviationBps(average, spot);
     }

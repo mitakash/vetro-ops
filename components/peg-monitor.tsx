@@ -17,6 +17,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import {
+  counterPerVetroExecutionWad,
   counterPerVetroWad,
   quoteExactInput,
   stableGetDy,
@@ -26,7 +27,7 @@ import {
   type StablePoolState,
 } from "@/lib/peg-math";
 import type { ClSim, CurveSim, PegMonitor, PegRow } from "@/lib/peg-types";
-import { deviationBps, exchangeWad, formatAmount, formatBps, formatPegPrice } from "@/lib/quote-math";
+import { deviationBps, formatAmount, formatBps, formatPegPrice } from "@/lib/quote-math";
 import { externalLinkLabel, linkPlace } from "@/lib/venue-links";
 
 const PEGS: PegAsset[] = ["VUSD", "sVUSD", "vetBTC", "svetBTC"];
@@ -483,10 +484,12 @@ function describeCurve(sim: CurveSim, side: "buy" | "sell", amount: bigint): str
     sim.decimals[sim.vetroIndex],
     sim.decimals[sim.counterIndex],
   );
-  const average =
-    side === "sell"
-      ? exchangeWad(dy, amount, sim.decimals[sim.vetroIndex], sim.decimals[sim.counterIndex])
-      : exchangeWad(amount, dy, sim.decimals[sim.counterIndex], sim.decimals[sim.vetroIndex]);
+  const average = counterPerVetroExecutionWad({
+    counterAmount: side === "sell" ? dy : amount,
+    vetroAmount: side === "sell" ? amount : dy,
+    vetroDecimals: sim.decimals[sim.vetroIndex],
+    counterDecimals: sim.decimals[sim.counterIndex],
+  });
   const outputSymbol = sim.symbols[outputIndex];
   const fair = sim.fairWad ? BigInt(sim.fairWad) : null;
   const bps = fair && end > 0n ? formatBps(deviationBps(end, fair)) : "n/a";
@@ -513,11 +516,14 @@ function describeCl(sim: ClSim, side: "buy" | "sell", amount: bigint): string {
   const outputSymbol = side === "sell" ? counterSymbol : vetroSymbol;
   const end = counterPerVetroWad(quote.sqrtPriceX96, sim.decimals0, sim.decimals1, sim.vetroIsToken0);
   const average =
-    side === "sell" && quote.amountOut > 0n
-      ? exchangeWad(quote.amountOut, quote.amountIn, vetroDecimals, counterDecimals)
-      : quote.amountOut > 0n
-        ? exchangeWad(quote.amountIn, quote.amountOut, counterDecimals, vetroDecimals)
-        : null;
+    quote.amountOut > 0n && quote.amountIn > 0n
+      ? counterPerVetroExecutionWad({
+          counterAmount: side === "sell" ? quote.amountOut : quote.amountIn,
+          vetroAmount: side === "sell" ? quote.amountIn : quote.amountOut,
+          vetroDecimals,
+          counterDecimals,
+        })
+      : null;
   const fair = sim.fairWad ? BigInt(sim.fairWad) : null;
   const bps = fair && end > 0n ? formatBps(deviationBps(end, fair)) : "n/a";
   const partial = quote.insufficient ? " Loaded ticks cannot finish this size." : "";

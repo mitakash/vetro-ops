@@ -12,6 +12,9 @@ import {
   amount0Delta,
   amount1Delta,
   fairCounterPerVetroWad,
+  approximateTick,
+  bitmapWord,
+  counterPerVetroExecutionWad,
   getSqrtRatioAtTick,
   nextInitializedTick,
   quoteToSqrtPrice,
@@ -251,6 +254,62 @@ describe("quote math", () => {
     assert.ok(rich);
     assert.equal(counterpartyTone(rich), "above");
     assert.equal(excludeCounterpartyFromHeadline(rich), true);
+  });
+
+  it("keeps the average price near par when buying a 6-decimal stable for an 18-decimal token", () => {
+    const usdc = 10_527_660_000n;
+    const vusd = 10_540n * 10n ** 18n;
+    const bought = counterPerVetroExecutionWad({
+      counterAmount: usdc,
+      vetroAmount: vusd,
+      vetroDecimals: 18,
+      counterDecimals: 6,
+    });
+    assert.ok(bought > 998_800_000_000_000_000n && bought < 998_900_000_000_000_000n);
+    const swappedDecimals = exchangeWad(usdc, vusd, 6, 18);
+    assert.ok(swappedDecimals < 10n ** 12n);
+
+    const quoted = (decimals0: number, decimals1: number, vetroIsToken0: boolean) => {
+      const spot = 990_000_000_000_000_000n;
+      const fair = 10n ** 18n;
+      const sqrt = targetSqrtPrice({ fairWad: spot, decimals0, decimals1, vetroIsToken0 });
+      const limit = targetSqrtPrice({ fairWad: fair, decimals0, decimals1, vetroIsToken0 });
+      const tick = approximateTick(sqrt);
+      const word = bitmapWord(tick, 1);
+      const quote = quoteToSqrtPrice(
+        {
+          sqrtPriceX96: sqrt,
+          tick,
+          liquidity: 10n ** 24n,
+          feePips: 100,
+          tickSpacing: 1,
+          bitmap: new Map([
+            [word - 1, 0n],
+            [word, 0n],
+            [word + 1, 0n],
+          ]),
+          liquidityNet: new Map(),
+        },
+        limit,
+      );
+      const selling = quote.zeroForOne === vetroIsToken0;
+      const average = counterPerVetroExecutionWad({
+        counterAmount: selling ? quote.amountOut : quote.amountIn,
+        vetroAmount: selling ? quote.amountIn : quote.amountOut,
+        vetroDecimals: vetroIsToken0 ? decimals0 : decimals1,
+        counterDecimals: vetroIsToken0 ? decimals1 : decimals0,
+      });
+      return { quote, average, selling };
+    };
+
+    const usdcIsToken0 = quoted(6, 18, false);
+    const usdcIsToken1 = quoted(18, 6, true);
+    for (const result of [usdcIsToken0, usdcIsToken1]) {
+      assert.equal(result.selling, false);
+      assert.equal(result.quote.insufficient, false);
+      assert.ok(result.quote.amountIn > 0n);
+      assert.ok(Math.abs(deviationBps(result.average, 990_000_000_000_000_000n)) < 100);
+    }
   });
 
   it("turns a 7-day reward rate into a daily amount", () => {
