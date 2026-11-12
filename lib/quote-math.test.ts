@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { buildTradeUrl, explorerUrl } from "./venue-links.ts";
+import { buildTradeUrl, explorerUrl, externalLinkLabel, linkPlace } from "./venue-links.ts";
 import {
   counterpartyTone,
   excludeCounterpartyFromHeadline,
@@ -223,6 +223,13 @@ describe("quote math", () => {
     );
     assert.equal(explorerUrl("ethereum", curve), `https://etherscan.io/address/${curve}`);
     assert.equal(explorerUrl("hemi", brown), `https://explorer.hemi.xyz/address/${brown}`);
+    assert.equal(linkPlace(`https://www.curve.finance/dex/ethereum/pools/${curve}/swap`), "Curve");
+    assert.equal(linkPlace(sushi), "Sushi");
+    assert.equal(linkPlace(`https://app.brownfi.io/clamm/pool/${brown}`), "BrownFi");
+    assert.equal(
+      externalLinkLabel("Curve VUSD/crvUSD", "Curve"),
+      "Open Curve VUSD/crvUSD on Curve (new tab)",
+    );
   });
 
   it("treats an msUSD depeg as the counterparty, not a VUSD premium", () => {

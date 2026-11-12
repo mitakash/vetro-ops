@@ -32,6 +32,22 @@ export function buildTradeUrl(venue: TradeLinkInput): string {
   return explorerUrl(venue.chain, pool);
 }
 
+/** Where a trade or explorer URL opens, for the accessible name. */
+export function linkPlace(url: string): string {
+  if (url.includes("curve.finance")) return "Curve";
+  if (url.includes("app.uniswap.org")) return "Uniswap";
+  if (url.includes("sushi.com")) return "Sushi";
+  if (url.includes("brownfi.io")) return "BrownFi";
+  if (url.includes("etherscan.io")) return "Etherscan";
+  if (url.includes("explorer.hemi.xyz")) return "Hemi explorer";
+  if (url.includes("coingecko.com")) return "CoinGecko";
+  return "the web";
+}
+
+export function externalLinkLabel(name: string, place: string): string {
+  return `Open ${name} on ${place} (new tab)`;
+}
+
 export function explorerUrl(chain: LinkChain, pool: string): string {
   if (chain === "hemi") return `https://explorer.hemi.xyz/address/${pool}`;
   return `https://etherscan.io/address/${pool}`;

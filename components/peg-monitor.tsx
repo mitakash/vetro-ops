@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { AlertTriangle } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -27,6 +27,7 @@ import {
 } from "@/lib/peg-math";
 import type { ClSim, CurveSim, PegMonitor, PegRow } from "@/lib/peg-types";
 import { deviationBps, exchangeWad, formatAmount, formatBps, formatPegPrice } from "@/lib/quote-math";
+import { externalLinkLabel, linkPlace } from "@/lib/venue-links";
 
 const PEGS: PegAsset[] = ["VUSD", "sVUSD", "vetBTC", "svetBTC"];
 
@@ -183,14 +184,9 @@ function PoolRows({ row, updated }: { row: PegRow; updated: string }) {
     <>
       <TableRow>
         <TableCell>
-          <a
-            className="font-medium underline-offset-2 hover:underline"
-            href={row.tradeUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-          >
+          <ExternalLink href={row.tradeUrl} label={externalLinkLabel(row.venue, linkPlace(row.tradeUrl))} className="font-medium">
             {row.venue}
-          </a>
+          </ExternalLink>
           <div className="text-xs text-muted-foreground">
             {row.model}
             {row.feeLabel ? ` · ${row.feeLabel}` : ""}
@@ -256,9 +252,13 @@ function PoolRows({ row, updated }: { row: PegRow; updated: string }) {
         <TableCell className="max-w-56 font-mono text-xs text-muted-foreground">{row.depth ?? "—"}</TableCell>
         <TableCell className="text-xs whitespace-nowrap text-muted-foreground">{formatUtc(updated)}</TableCell>
         <TableCell>
-          <a className="text-xs underline-offset-2 hover:underline" href={row.explorerUrl} target="_blank" rel="noopener noreferrer">
+          <ExternalLink
+            href={row.explorerUrl}
+            label={externalLinkLabel(row.venue, linkPlace(row.explorerUrl))}
+            className="text-xs"
+          >
             {row.chain === "hemi" ? "Explorer" : "Etherscan"}
-          </a>
+          </ExternalLink>
         </TableCell>
       </TableRow>
       {row.sim ? (
@@ -291,12 +291,15 @@ function TradeCell({ row }: { row: PegRow }) {
       <span>
         {size}{" "}
         <a
-          className="text-xs underline underline-offset-2"
           href={row.tradeUrl}
           target="_blank"
           rel="noopener noreferrer"
+          title={externalLinkLabel(row.venue, linkPlace(row.tradeUrl))}
+          aria-label={externalLinkLabel(row.venue, linkPlace(row.tradeUrl))}
+          className="ml-1 inline-flex cursor-pointer items-center gap-0.5 rounded-full bg-[#2563eb] px-2 py-0.5 align-middle text-[11px] font-medium text-white no-underline hover:bg-[#1d4ed8] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#60a5fa]"
         >
           Trade
+          <span aria-hidden="true">↗</span>
         </a>
       </span>
       {row.averagePrice ? (
@@ -320,6 +323,35 @@ function TradeCell({ row }: { row: PegRow }) {
   );
 }
 
+const externalLinkClass =
+  "inline-flex cursor-pointer items-center gap-0.5 text-[#60a5fa] underline decoration-[#60a5fa] underline-offset-2 hover:text-[#93c5fd] hover:decoration-[#93c5fd] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#93c5fd]";
+
+function ExternalLink({
+  href,
+  label,
+  className,
+  children,
+}: {
+  href: string;
+  label: string;
+  className?: string;
+  children: ReactNode;
+}) {
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      title={label}
+      aria-label={label}
+      className={className ? `${externalLinkClass} ${className}` : externalLinkClass}
+    >
+      {children}
+      <span aria-hidden="true">↗</span>
+    </a>
+  );
+}
+
 function DepegCopy({ notice }: { notice: NonNullable<PegRow["counterparty"]> }) {
   const lead =
     notice.tone === "above"
@@ -328,9 +360,9 @@ function DepegCopy({ notice }: { notice: NonNullable<PegRow["counterparty"]> }) 
   return (
     <>
       {lead}{" "}
-      <a href={notice.href} target="_blank" rel="noopener noreferrer" className="underline underline-offset-2">
+      <ExternalLink href={notice.href} label={externalLinkLabel(notice.symbol, "CoinGecko")}>
         Check {notice.symbol} price before trading.
-      </a>
+      </ExternalLink>
     </>
   );
 }
