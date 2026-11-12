@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { AlertTriangle } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -16,19 +16,11 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import {
-  counterPerVetroExecutionWad,
-  counterPerVetroWad,
-  quoteExactInput,
-  stableGetDy,
-  stableMarginalWad,
-  type ClPool,
-  type PegAsset,
-  type StablePoolState,
-} from "@/lib/peg-math";
-import type { ClSim, CurveSim, PegMonitor, PegRow } from "@/lib/peg-types";
-import { deviationBps, formatAmount, formatBps, formatPegPrice } from "@/lib/quote-math";
+import { type PegAsset } from "@/lib/peg-math";
+import type { PegMonitor, PegRow } from "@/lib/peg-types";
+import { formatBps } from "@/lib/quote-math";
 import { externalLinkLabel, linkPlace } from "@/lib/venue-links";
+import { quoteWhatIf, sizePresets, type WhatIfResult } from "@/lib/what-if";
 
 const PEGS: PegAsset[] = ["VUSD", "sVUSD", "vetBTC", "svetBTC"];
 
@@ -262,19 +254,11 @@ function PoolRows({ row, updated }: { row: PegRow; updated: string }) {
           </ExternalLink>
         </TableCell>
       </TableRow>
-      {row.sim ? (
-        <TableRow>
-          <TableCell colSpan={10} className="bg-muted/30">
-            <WhatIf row={row} />
-          </TableCell>
-        </TableRow>
-      ) : row.note ? (
-        <TableRow>
-          <TableCell colSpan={10} className="text-xs text-muted-foreground">
-            {row.note}
-          </TableCell>
-        </TableRow>
-      ) : null}
+      <TableRow>
+        <TableCell colSpan={10} className="bg-muted/30">
+          <WhatIf row={row} />
+        </TableCell>
+      </TableRow>
     </>
   );
 }
@@ -368,42 +352,158 @@ function DepegCopy({ notice }: { notice: NonNullable<PegRow["counterparty"]> }) 
   );
 }
 
+function blockedReason(row: PegRow): string | null {
+  if (!row.sim) return row.note ?? row.error ?? "This pool cannot be simulated.";
+  if (row.sim.kind === "cl" && row.sim.liquidity === "0") {
+    return row.note ?? "No active liquidity in the current tick, so this pool cannot be quoted.";
+  }
+  if (!row.fairValue) return row.note ?? "No reference price for this pair, so this estimate is unavailable.";
+  return null;
+}
+
 function WhatIf({ row }: { row: PegRow }) {
+  const reason = blockedReason(row);
   const [side, setSide] = useState<"buy" | "sell">(row.direction ?? "sell");
   const [amount, setAmount] = useState("");
+  const [result, setResult] = useState<WhatIfResult | null>(null);
   const symbol = side === "sell" ? row.vetroSymbol : row.counterSymbol;
-  const result = useMemo(() => describeTrade(row, side, amount), [row, side, amount]);
   const inputId = `what-if-${row.id}`;
+  const presets = sizePresets({
+    symbol,
+    fairValue: row.fairValue,
+    poolPrice: row.poolPrice,
+    inputIsCounter: side === "buy",
+  });
+  const fairFill = row.direction && row.tradeAmount && (row.tradeStatus === "ok" || row.tradeStatus === "insufficient")
+    ? { side: row.direction, amount: row.tradeAmount.replace(/,/g, "") }
+    : null;
+
+  function calculate(nextSide: "buy" | "sell", nextAmount: string) {
+    if (!row.sim) return;
+    const trimmed = nextAmount.trim();
+    if (!trimmed) {
+      setResult({ ok: false, message: "Enter an amount, then press Calculate." });
+      return;
+    }
+    setResult(quoteWhatIf(row.sim, nextSide, trimmed));
+  }
+
   return (
-    <form className="flex flex-col gap-2 px-1 py-1" onSubmit={(event) => event.preventDefault()}>
-      <div className="flex flex-wrap items-end gap-2">
-        <label className="flex flex-col gap-1 text-xs text-muted-foreground" htmlFor={`${inputId}-side`}>
-          What if I
-          <select
-            id={`${inputId}-side`}
-            className="h-8 rounded-lg border border-input bg-transparent px-2 text-sm text-foreground"
-            value={side}
-            onChange={(event) => setSide(event.target.value === "buy" ? "buy" : "sell")}
+    <form
+      className="flex flex-col gap-2 px-1 py-1"
+      onSubmit={(event) => {
+        event.preventDefault();
+        calculate(side, amount);
+      }}
+    >
+      <fieldset disabled={reason !== null} className="flex flex-col gap-2 disabled:opacity-60">
+        <div className="flex flex-wrap items-end gap-2">
+          <label className="flex flex-col gap-1 text-xs text-muted-foreground" htmlFor={`${inputId}-side`}>
+            What if I
+            <select
+              id={`${inputId}-side`}
+              className="h-8 cursor-pointer rounded-lg border border-input bg-transparent px-2 text-sm text-foreground"
+              value={side}
+              onChange={(event) => {
+                setSide(event.target.value === "buy" ? "buy" : "sell");
+                setResult(null);
+              }}
+            >
+              <option value="buy">buy {row.vetroSymbol}</option>
+              <option value="sell">sell {row.vetroSymbol}</option>
+            </select>
+          </label>
+          <label className="flex min-w-40 flex-col gap-1 text-xs text-muted-foreground" htmlFor={inputId}>
+            Amount ({symbol})
+            <Input
+              id={inputId}
+              inputMode="decimal"
+              value={amount}
+              placeholder="0.0"
+              onChange={(event) => {
+                setAmount(event.target.value);
+                setResult(null);
+              }}
+            />
+          </label>
+          <button
+            type="submit"
+            className="inline-flex h-8 cursor-pointer items-center rounded-full bg-[#2563eb] px-3 text-sm font-medium text-white hover:bg-[#1d4ed8] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#60a5fa] disabled:cursor-not-allowed"
           >
-            <option value="buy">buy {row.vetroSymbol}</option>
-            <option value="sell">sell {row.vetroSymbol}</option>
-          </select>
-        </label>
-        <label className="flex min-w-40 flex-col gap-1 text-xs text-muted-foreground" htmlFor={inputId}>
-          Amount ({symbol})
-          <Input
-            id={inputId}
-            inputMode="decimal"
-            value={amount}
-            placeholder="0.0"
-            onChange={(event) => setAmount(event.target.value)}
-          />
-        </label>
-      </div>
-      <p className="text-xs text-muted-foreground">
-        {result ? `${result} Estimate only. This page cannot send a transaction.` : (row.note ?? "Estimate only. This page cannot send a transaction.")}
-      </p>
+            Calculate
+          </button>
+        </div>
+        <div className="flex flex-wrap gap-1.5">
+          <button
+            type="button"
+            disabled={!fairFill}
+            title={fairFill ? "Prefill the trade that restores fair value" : "No trade-to-fair size for this pool"}
+            className="cursor-pointer rounded-full border border-[#60a5fa]/60 px-2 py-0.5 text-xs text-[#60a5fa] hover:bg-[#60a5fa]/15 disabled:cursor-not-allowed disabled:opacity-50"
+            onClick={() => {
+              if (!fairFill) return;
+              setSide(fairFill.side);
+              setAmount(fairFill.amount);
+              calculate(fairFill.side, fairFill.amount);
+            }}
+          >
+            Trade to fair
+          </button>
+          {presets.map((preset) => (
+            <button
+              key={preset.label}
+              type="button"
+              className="cursor-pointer rounded-full border border-[#60a5fa]/60 px-2 py-0.5 text-xs text-[#60a5fa] hover:bg-[#60a5fa]/15"
+              onClick={() => {
+                setAmount(preset.amount);
+                calculate(side, preset.amount);
+              }}
+            >
+              {preset.label}
+            </button>
+          ))}
+        </div>
+      </fieldset>
+      {reason ? (
+        <p className="rounded-lg border border-foreground/15 bg-muted px-3 py-2 text-sm text-foreground">{reason}</p>
+      ) : null}
+      {!reason && result && !result.ok ? (
+        <p className="text-sm text-red-400" role="alert">
+          {result.message}
+        </p>
+      ) : null}
+      {!reason && result?.ok ? <QuoteBox result={result} /> : null}
+      <p className="text-xs text-muted-foreground">Estimate only. This page cannot send a transaction.</p>
     </form>
+  );
+}
+
+function QuoteBox({ result }: { result: Extract<WhatIfResult, { ok: true }> }) {
+  const after =
+    result.endPremiumBps === null ? (
+      "No fair value on this pool."
+    ) : (
+      <>
+        {result.overshoots ? "Overshoots fair value." : "Does not overshoot fair value."} Resulting pool
+        premium/discount <strong className="font-mono">{formatBps(result.endPremiumBps)}</strong>.
+      </>
+    );
+  return (
+    <div className="rounded-lg border border-[#60a5fa]/50 bg-[#60a5fa]/10 px-3 py-2 text-sm" role="status">
+      <p>
+        You pay <strong className="font-mono">{result.payAmount} {result.paySymbol}</strong>
+      </p>
+      <p>
+        You receive <strong className="font-mono">{result.receiveAmount} {result.receiveSymbol}</strong>
+      </p>
+      <p>
+        Average price <strong className="font-mono">{result.averagePrice}</strong> {result.averageUnit}
+      </p>
+      <p>
+        Price impact <strong className="font-mono">{formatBps(result.priceImpactBps)}</strong>
+      </p>
+      <p>{after}</p>
+      {result.partial ? <p>Loaded depth cannot finish this size. Amounts are the portion that fits.</p> : null}
+    </div>
   );
 }
 
@@ -443,109 +543,6 @@ function HowCalculated() {
       </CardContent>
     </Card>
   );
-}
-
-function describeTrade(row: PegRow, side: "buy" | "sell", amountText: string): string | null {
-  const sim = row.sim;
-  if (!sim) return null;
-  const trimmed = amountText.trim();
-  if (!trimmed) return null;
-  const decimals = inputDecimals(sim, side);
-  const raw = parseDecimal(trimmed, decimals);
-  if (raw === null) return "Enter a positive amount with no more decimals than the token allows.";
-  if (sim.kind === "curve") return describeCurve(sim, side, raw);
-  return describeCl(sim, side, raw);
-}
-
-function describeCurve(sim: CurveSim, side: "buy" | "sell", amount: bigint): string {
-  const state: StablePoolState = {
-    balances: [BigInt(sim.balances[0]), BigInt(sim.balances[1])],
-    rates: [BigInt(sim.rates[0]), BigInt(sim.rates[1])],
-    ampPrecise: BigInt(sim.ampPrecise),
-    fee: BigInt(sim.fee),
-    offpegFeeMultiplier: BigInt(sim.offpegFeeMultiplier),
-  };
-  const inputIndex = side === "buy" ? sim.counterIndex : sim.vetroIndex;
-  const outputIndex = side === "buy" ? sim.vetroIndex : sim.counterIndex;
-  let dy: bigint;
-  try {
-    dy = stableGetDy(state, inputIndex, outputIndex, amount);
-  } catch {
-    return "That size cannot be quoted on this pool.";
-  }
-  if (dy <= 0n || dy >= state.balances[outputIndex]) return "That size is larger than the pool's other side.";
-  const balances = state.balances.slice();
-  balances[inputIndex] += amount;
-  balances[outputIndex] -= dy;
-  const end = stableMarginalWad(
-    { ...state, balances },
-    sim.vetroIndex,
-    sim.counterIndex,
-    sim.decimals[sim.vetroIndex],
-    sim.decimals[sim.counterIndex],
-  );
-  const average = counterPerVetroExecutionWad({
-    counterAmount: side === "sell" ? dy : amount,
-    vetroAmount: side === "sell" ? amount : dy,
-    vetroDecimals: sim.decimals[sim.vetroIndex],
-    counterDecimals: sim.decimals[sim.counterIndex],
-  });
-  const outputSymbol = sim.symbols[outputIndex];
-  const fair = sim.fairWad ? BigInt(sim.fairWad) : null;
-  const bps = fair && end > 0n ? formatBps(deviationBps(end, fair)) : "n/a";
-  return `Output ${formatAmount(dy, sim.decimals[outputIndex])} ${outputSymbol}. Average ${formatPegPrice(average)} ${sim.symbols[sim.counterIndex]} per ${sim.symbols[sim.vetroIndex]}. Resulting premium ${bps}.`;
-}
-
-function describeCl(sim: ClSim, side: "buy" | "sell", amount: bigint): string {
-  const pool: ClPool = {
-    sqrtPriceX96: BigInt(sim.sqrtPriceX96),
-    tick: sim.tick,
-    liquidity: BigInt(sim.liquidity),
-    feePips: sim.feePips,
-    tickSpacing: sim.tickSpacing,
-    bitmap: new Map(sim.bitmap.map((word) => [word.word, BigInt(word.value)])),
-    liquidityNet: new Map(sim.ticks.map((tick) => [tick.tick, BigInt(tick.liquidityNet)])),
-  };
-  const zeroForOne = side === "sell" ? sim.vetroIsToken0 : !sim.vetroIsToken0;
-  const quote = quoteExactInput(pool, zeroForOne, amount);
-  const vetroDecimals = sim.vetroIsToken0 ? sim.decimals0 : sim.decimals1;
-  const counterDecimals = sim.vetroIsToken0 ? sim.decimals1 : sim.decimals0;
-  const vetroSymbol = sim.vetroIsToken0 ? sim.symbol0 : sim.symbol1;
-  const counterSymbol = sim.vetroIsToken0 ? sim.symbol1 : sim.symbol0;
-  const outputDecimals = side === "sell" ? counterDecimals : vetroDecimals;
-  const outputSymbol = side === "sell" ? counterSymbol : vetroSymbol;
-  const end = counterPerVetroWad(quote.sqrtPriceX96, sim.decimals0, sim.decimals1, sim.vetroIsToken0);
-  const average =
-    quote.amountOut > 0n && quote.amountIn > 0n
-      ? counterPerVetroExecutionWad({
-          counterAmount: side === "sell" ? quote.amountOut : quote.amountIn,
-          vetroAmount: side === "sell" ? quote.amountIn : quote.amountOut,
-          vetroDecimals,
-          counterDecimals,
-        })
-      : null;
-  const fair = sim.fairWad ? BigInt(sim.fairWad) : null;
-  const bps = fair && end > 0n ? formatBps(deviationBps(end, fair)) : "n/a";
-  const partial = quote.insufficient ? " Loaded ticks cannot finish this size." : "";
-  return `Output ${formatAmount(quote.amountOut, outputDecimals)} ${outputSymbol}. Average ${average ? formatPegPrice(average) : "—"} ${counterSymbol} per ${vetroSymbol}. Resulting premium ${bps}.${partial}`;
-}
-
-function inputDecimals(sim: CurveSim | ClSim, side: "buy" | "sell"): number {
-  if (sim.kind === "curve") return sim.decimals[side === "buy" ? sim.counterIndex : sim.vetroIndex];
-  const vetro = sim.vetroIsToken0 ? sim.decimals0 : sim.decimals1;
-  const counter = sim.vetroIsToken0 ? sim.decimals1 : sim.decimals0;
-  return side === "sell" ? vetro : counter;
-}
-
-function parseDecimal(input: string, decimals: number): bigint | null {
-  if (!/^\d+(\.\d+)?$/.test(input)) return null;
-  const [whole, fraction = ""] = input.split(".");
-  if (fraction.length > decimals) return null;
-  try {
-    return BigInt(whole + fraction.padEnd(decimals, "0"));
-  } catch {
-    return null;
-  }
 }
 
 function fairDetail(data: PegMonitor, peg: PegAsset): string {

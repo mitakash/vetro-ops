@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import { parseDecimalAmount, quoteWhatIf, sizePresets } from "./what-if.ts";
+import type { ClSim, CurveSim } from "./peg-types.ts";
 import { buildTradeUrl, explorerUrl, externalLinkLabel, linkPlace } from "./venue-links.ts";
 import {
   counterpartyTone,
@@ -30,6 +32,7 @@ import {
   cappedQuoteAmount,
   deviationBps,
   exchangeWad,
+  formatAmount,
   formatBps,
   formatUnits,
   invertWad,
@@ -310,6 +313,82 @@ describe("quote math", () => {
       assert.ok(result.quote.amountIn > 0n);
       assert.ok(Math.abs(deviationBps(result.average, 990_000_000_000_000_000n)) < 100);
     }
+  });
+
+  it("quotes a 6-decimal buy near par in either token order", () => {
+    const spot = 990_000_000_000_000_000n;
+    const fair = (10n ** 18n).toString();
+    const simFor = (decimals0: number, decimals1: number, vetroIsToken0: boolean): ClSim => {
+      const sqrt = targetSqrtPrice({ fairWad: spot, decimals0, decimals1, vetroIsToken0 });
+      const tick = approximateTick(sqrt);
+      const word = bitmapWord(tick, 1);
+      return {
+        kind: "cl",
+        sqrtPriceX96: sqrt.toString(),
+        tick,
+        liquidity: (10n ** 24n).toString(),
+        feePips: 100,
+        tickSpacing: 1,
+        decimals0,
+        decimals1,
+        symbol0: vetroIsToken0 ? "VUSD" : "USDC",
+        symbol1: vetroIsToken0 ? "USDC" : "VUSD",
+        vetroIsToken0,
+        fairWad: fair,
+        bitmap: [
+          { word: word - 1, value: "0" },
+          { word, value: "0" },
+          { word: word + 1, value: "0" },
+        ],
+        ticks: [],
+      };
+    };
+    for (const sim of [simFor(6, 18, false), simFor(18, 6, true)]) {
+      const result = quoteWhatIf(sim, "buy", "1000");
+      assert.equal(result.ok, true);
+      if (!result.ok) return;
+      assert.equal(result.paySymbol, "USDC");
+      assert.equal(result.receiveSymbol, "VUSD");
+      assert.ok(result.averagePrice.startsWith("0.99"));
+      assert.ok(Math.abs(result.priceImpactBps) < 100);
+      assert.equal(result.overshoots, false);
+    }
+
+    const curve: CurveSim = {
+      kind: "curve",
+      balances: [(10n * 10n ** 18n).toString(), (10n * 10n ** 8n).toString()],
+      rates: [(10n ** 18n).toString(), (10n ** 28n).toString()],
+      ampPrecise: (500n * 100n).toString(),
+      fee: "4000000",
+      offpegFeeMultiplier: (10n ** 10n).toString(),
+      decimals: [18, 8],
+      symbols: ["vetBTC", "WBTC"],
+      vetroIndex: 0,
+      counterIndex: 1,
+      fairWad: fair,
+    };
+    const btcBuy = quoteWhatIf(curve, "buy", "0.1");
+    assert.equal(btcBuy.ok, true);
+    if (!btcBuy.ok) return;
+    assert.equal(btcBuy.paySymbol, "WBTC");
+    assert.ok(btcBuy.averagePrice.startsWith("0.99") || btcBuy.averagePrice.startsWith("1.00"));
+    assert.ok(!btcBuy.averagePrice.startsWith("0.000"));
+    const tooBig = quoteWhatIf(curve, "buy", "1000");
+    assert.equal(tooBig.ok, false);
+    if (tooBig.ok) return;
+    assert.match(tooBig.message, /larger than this pool's vetBTC/);
+    const bad = quoteWhatIf(curve, "buy", "1.000000000");
+    assert.equal(bad.ok, false);
+    assert.equal(parseDecimalAmount("0", 6), null);
+    assert.equal(parseDecimalAmount(formatAmount(973568n, 8), 8), 973568n);
+    assert.deepEqual(
+      sizePresets({ symbol: "WBTC", fairValue: null, poolPrice: null, inputIsCounter: true }).map((chip) => chip.amount),
+      ["1", "10", "100"],
+    );
+    assert.deepEqual(
+      sizePresets({ symbol: "USDC.e", fairValue: null, poolPrice: null, inputIsCounter: true }).map((chip) => chip.label),
+      ["$1K", "$10K", "$100K"],
+    );
   });
 
   it("turns a 7-day reward rate into a daily amount", () => {

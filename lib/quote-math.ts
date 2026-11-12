@@ -79,7 +79,7 @@ export function formatAmount(raw: bigint, decimals: number): string {
   const scale = 10n ** BigInt(decimals);
   const absolute = raw < 0n ? -raw : raw;
   const whole = absolute / scale;
-  const digits = whole >= 1_000n ? 2 : whole >= 1n ? 4 : 6;
+  const digits = whole >= 1_000n ? 2 : whole >= 1n ? 4 : Math.min(8, Math.max(6, decimals));
   return formatUnits(raw, decimals, digits);
 }
 
